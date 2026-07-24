@@ -108,7 +108,7 @@
   <section>
     <h2>Average weight per truck (over the captured window)</h2>
     <div class="chart-wrap">
-      <canvas id="avg-bar-chart" height="220"></canvas>
+      <canvas id="avg-bar-chart" height="340"></canvas>
     </div>
   </section>
 
@@ -397,7 +397,7 @@
     </div>
 
     <!-- Chart canvas -->
-    <canvas id="m-chart" height="320"></canvas>
+    <canvas id="m-chart" height="440"></canvas>
     <div style="font-size: 0.75rem; color: var(--muted); margin-top: 4px;">
       Raw <code>Weighing Average Short</code> samples, 5-second resolution. No bucketing or smoothing.
     </div>
@@ -426,9 +426,15 @@ function renderAvgBarChart() {
   const labels = sorted.map(t => t.truck_code);
   const avgs = sorted.map(t => +(t.avg_peak_t || 0));
   const maxs = sorted.map(t => +(t.max_peak_t || 0));
+  // Min sample: from the raw signal — tells you how badly the scale is zeroed.
+  // We don't store this in TRUCKS, so compute it client-side from RAW instead.
+  const mins = sorted.map(t => {
+    const raw = RAW[t.device_serial];
+    if (!raw || !raw.samples || !raw.samples.length) return 0;
+    return Math.min.apply(null, raw.samples.map(s => s.v));
+  });
   const colors = sorted.map(t => colorMap[t.verdict[0]] || '#6b7280');
-  // Render avg as a filled bar; draw max as a thin top-marker line.
-  // Use a bar chart with custom border colour = verdict colour.
+  // Render avg as a filled bar; max as a thin top-marker; min as a thin bottom-marker.
   const datasets = [
     {
       type: 'bar',
@@ -442,16 +448,24 @@ function renderAvgBarChart() {
       categoryPercentage: 0.85,
     },
     {
-      type: 'line',
+      type: 'scatter',
       label: 'max peak (t)',
-      data: maxs,
+      data: maxs.map((m, i) => ({ x: labels[i], y: m })),
       borderColor: '#94a3b8',
-      borderWidth: 1.5,
-      pointRadius: 3,
-      pointBackgroundColor: colors,
-      pointBorderColor: colors,
-      tension: 0,
-      fill: false,
+      backgroundColor: colors,
+      pointRadius: 4,
+      pointStyle: 'triangle',
+      pointRotation: 0,
+      showLine: false,
+    },
+    {
+      type: 'scatter',
+      label: 'min sample (t)',
+      data: mins.map((m, i) => ({ x: labels[i], y: m })),
+      borderColor: '#94a3b8',
+      backgroundColor: colors,
+      pointRadius: 4,
+      pointStyle: 'rectRot',
       showLine: false,
     },
   ];
@@ -490,9 +504,15 @@ function renderAvgBarChart() {
           grid: { color: '#1e293b' },
         },
         y: {
-          beginAtZero: true,
+          // Allow the axis to dip below zero so un-zeroed baselines show clearly.
+          // suggestedMin keeps a one-truck outlier from dominating the scale.
+          suggestedMin: -100,
+          suggestedMax: 140,
           ticks: { color: '#94a3b8', callback: v => v + 't' },
-          grid: { color: '#1e293b' },
+          grid: {
+            color: (ctx) => ctx.tick.value === 0 ? '#475569' : '#1e293b',
+            lineWidth: (ctx) => ctx.tick.value === 0 ? 1.5 : 1,
+          },
         },
       },
     },
@@ -713,8 +733,19 @@ function drawChart(samples, t0, t1) {
           grid: { color: '#1e293b' },
         },
         y: {
+          // Auto-fit to the actual data range with sensible padding.
+          // Lets negative / un-zeroed baselines (e.g. -30t) read clearly.
           ticks: { color: '#94a3b8', callback: v => v + 't' },
-          grid: { color: '#1e293b' },
+          grid: {
+            color: (ctx) => ctx.tick.value === 0 ? '#475569' : '#1e293b',
+            lineWidth: (ctx) => ctx.tick.value === 0 ? 1.5 : 1,
+          },
+          // Pad 10% on each side so points don't hug the axes.
+          afterDataLimits: (scale) => {
+            const range = scale.max - scale.min;
+            scale.min -= range * 0.05;
+            scale.max += range * 0.10;
+          },
         },
       },
     },
