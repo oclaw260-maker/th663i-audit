@@ -450,17 +450,18 @@ const colorMap = { X: '#ef4444', '!': '#f59e0b', OK: '#22c55e', '~': '#6b7280' }
 function renderAvgBarChart() {
   const canvas = document.getElementById('avg-bar-chart');
   if (!canvas) return;
-  // Sort trucks by max_peak_t descending — heaviest first
-  const sorted = [...TRUCKS].sort((a, b) => (b.max_peak_t || 0) - (a.max_peak_t || 0));
+  // Sort trucks by avg_peak_t descending — heaviest average first
+  const sorted = [...TRUCKS].sort((a, b) => (b.avg_peak_t || 0) - (a.avg_peak_t || 0));
   const labels = sorted.map(t => t.truck_code);
-  // Floating bar: [baseline, max] for each truck.
+  // Floating bar: [baseline, avg_peak_t] for each truck.
+  // The TOP of the bar is now the average loaded weight (typical haul size).
   // baseline_t is median of empty/idle buckets — the typical empty weight.
   // Bars that extend above OR below 0 reveal zeroing issues.
   const ranges = sorted.map(t => {
     const baseline = (t.baseline_t !== undefined && t.baseline_t !== null) ? +t.baseline_t : 0;
-    const max = +t.max_peak_t || 0;
-    // If max < baseline (shouldn't happen, but guard against inversion)
-    return [Math.min(baseline, max), Math.max(baseline, max)];
+    const avg = +t.avg_peak_t || 0;
+    // Guard against inversion (avg < baseline is unusual but possible with bad zeroing)
+    return [Math.min(baseline, avg), Math.max(baseline, avg)];
   });
   const colors = sorted.map(t => colorMap[t.verdict[0]] || '#6b7280');
   // Zero-quality marker (% of empty samples within ±2t of zero)
@@ -468,9 +469,9 @@ function renderAvgBarChart() {
 
   const datasets = [
     {
-      // Floating bar showing working range per truck
+      // Floating bar showing baseline → average loaded working range
       type: 'bar',
-      label: 'unloaded → loaded range (t)',
+      label: 'baseline → avg loaded (t)',
       data: ranges,
       backgroundColor: colors.map(c => c + '99'),
       borderColor: colors,
@@ -480,14 +481,14 @@ function renderAvgBarChart() {
       categoryPercentage: 0.85,
     },
     {
-      // Average loaded weight as a horizontal tick mid-bar (where it actually loads to)
+      // Maximum loaded weight as a triangle above the bar (peak excursion marker)
       type: 'scatter',
-      label: 'avg loaded (t)',
-      data: sorted.map((t, i) => ({ x: labels[i], y: +t.avg_peak_t || 0 })),
+      label: 'max peak (t)',
+      data: sorted.map((t, i) => ({ x: labels[i], y: +t.max_peak_t || 0 })),
       borderColor: '#fbbf24',
       backgroundColor: '#fbbf24',
-      pointRadius: 5,
-      pointStyle: 'rect',
+      pointRadius: 6,
+      pointStyle: 'triangle',
       pointBorderWidth: 1.5,
       pointBorderColor: '#000',
       showLine: false,
@@ -545,12 +546,12 @@ function renderAvgBarChart() {
             },
             label: (item) => {
               const i = item.dataIndex;
-              if (item.dataset.label === 'unloaded → loaded range (t)') {
+              if (item.dataset.label === 'baseline → avg loaded (t)') {
                 const r = ranges[i];
                 return 'range: ' + r[0].toFixed(1) + 't → ' + r[1].toFixed(1) + 't';
               }
-              if (item.dataset.label === 'avg loaded (t)') {
-                return 'avg loaded: ' + item.parsed.y.toFixed(1) + 't';
+              if (item.dataset.label === 'max peak (t)') {
+                return 'max peak: ' + item.parsed.y.toFixed(1) + 't';
               }
               return item.dataset.label + ': ' + (item.parsed.y ?? '').toString();
             },
