@@ -26,15 +26,26 @@ log "Step 2: Extract profiles + raw samples"
 "$PY" extract_th663_hub.py >> "$LOGFILE" 2>&1 || { log "extract failed"; exit 1; }
 "$PY" export_raw_samples.py >> "$LOGFILE" 2>&1 || { log "raw-sample export failed"; exit 1; }
 
-log "Step 3: Rebuild dashboard HTML"
+log "Step 3: Rebuild dashboard HTMLs"
 "$PY" build_hub_dashboard.py >> "$LOGFILE" 2>&1 || { log "dashboard build failed"; exit 1; }
+"$PY" build_echarts_dashboard.py >> "$LOGFILE" 2>&1 || { log "echarts dashboard build failed"; exit 1; }
 
 log "Step 4: Stage + deploy"
 cp /home/turbo/th663_hub_audit.html "$SITE/index.html"
+cp /home/turbo/th663_hub_audit_echarts.html "$SITE/echarts.html"
 
 cd "$SITE"
-# Skip deploy if no changes detected
-if git diff --quiet -- index.html 2>/dev/null && git diff --cached --quiet -- index.html; then
+# Skip deploy if no changes detected (either file)
+changed=0
+for f in index.html echarts.html; do
+  if git diff --quiet -- "$f" 2>/dev/null; then
+    :
+  else
+    changed=1
+    break
+  fi
+done
+if [ "$changed" -eq 0 ]; then
   log "No content change vs last deploy — skipping push"
   echo "" >> "$LOGFILE"
   exit 0
@@ -54,12 +65,21 @@ for i in $(seq 1 18); do
   sleep 5
 done
 
-# Confirm key marker from THIS run
+# Confirm key marker from THIS run on index.html
 PAGE=$(curl -s --max-time 6 "$URL")
 if echo "$PAGE" | grep -q 'unloaded → loaded range'; then
-  log "Verified: new bar-chart marker present"
+  log "Verified: new bar-chart marker present on index.html"
 else
-  log "WARN: new bar-chart marker not visible yet — Pages may still be propagating"
+  log "WARN: new bar-chart marker not visible yet on index.html — Pages may still be propagating"
+fi
+
+# Confirm ECharts page is also live
+ECHARTS_URL="${URL}echarts.html"
+ECHARTS_SIZE=$(curl -s --max-time 6 "$ECHARTS_URL" 2>/dev/null | wc -c)
+if [ "$ECHARTS_SIZE" -gt 1000000 ]; then
+  log "ECharts page live: $ECHARTS_SIZE bytes"
+else
+  log "WARN: ECharts page not yet live at $ECHARTS_URL"
 fi
 
 log "Daily update complete"
