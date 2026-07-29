@@ -56,11 +56,18 @@
   #slider-wrap { margin: 14px 0 8px; }
   .range-meta { display: flex; justify-content: space-between; color: var(--muted); font-size: 0.78rem; font-family: monospace; margin-bottom: 6px; }
   .dual-range { position: relative; height: 28px; margin: 4px 0; }
+  /* Both inputs overlay each other so the user gets two thumbs in the same track.
+     The first input (r-start) sits BELOW the second (r-end) — we want the r-end
+     thumb to be reachable visually, so r-end gets higher z-index. r-start thumb
+     is still reachable because it has lower z-index but it renders to the left
+     of r-end (which is at 100% by default). */
   .dual-range input[type=range] {
     position: absolute; top: 0; left: 0; width: 100%;
     -webkit-appearance: none; appearance: none;
     background: none; pointer-events: none; height: 28px; margin: 0;
   }
+  .dual-range input#r-start { z-index: 2; }
+  .dual-range input#r-end   { z-index: 3; }
   .dual-range input[type=range]::-webkit-slider-thumb {
     -webkit-appearance: none; appearance: none;
     width: 18px; height: 18px; border-radius: 50%; background: var(--accent);
