@@ -386,6 +386,14 @@ const RAW = {"T063D346": {"earliest": 1784200202519, "latest": 1785195364161, "s
 
 const colorMap = { X: '#ef4444', '!': '#f59e0b', OK: '#22c55e', '~': '#6b7280' };
 
+// Module-scope state used by the bar chart's onclick handler.
+// Declared BEFORE buildBarChart() so the TDZ rule is satisfied at
+// chart init time (ECharts can fire onclick synchronously during
+// setOption on legend-style events, and the arrow function would
+// otherwise hit a ReferenceError on `currentSamples`).
+let modalChart = null;
+let currentSamples = [];
+
 // ============================================================
 // Page-level bar chart (ECharts)
 // ============================================================
@@ -471,6 +479,8 @@ function buildBarChart() {
               stroke: colors[i],
               lineWidth: 1.5,
             },
+            // Click anywhere within the bar to drill in.
+            onclick: () => openDrill(t.name),
           };
           // Triangle marker for max peak, above the bar
           const maxP = api.coord([i, t.max]);
@@ -488,6 +498,8 @@ function buildBarChart() {
               stroke: '#000',
               lineWidth: 1.5,
             },
+            // Click the triangle to drill in too.
+            onclick: () => openDrill(t.name),
           };
           return { type: 'group', children: [rect, tri] };
         },
@@ -524,11 +536,36 @@ function buildBarChart() {
 const barChart = buildBarChart();
 window.addEventListener('resize', () => barChart.resize());
 
+// Click handler for the bar chart. This is a fallback for cases
+// where ECharts' custom-element onclick handler doesn't fire (e.g.
+// when a click is detected at a slightly offset position, or when
+// the underlying ZRender element isn't hit). The bar's dataIndex
+// maps to truckData[i].name, so we can route to the same drill-in.
+barChart.on('click', (params) => {
+  if (params.componentType === 'series' && params.seriesName === 'baseline → avg loaded (t)') {
+    const i = params.dataIndex;
+    if (typeof i === 'number') {
+      // Re-derive the truck code in the same order as buildBarChart.
+      const sorted = [...TRUCKS].sort((a, b) => (b.avg_peak_t || 0) - (a.avg_peak_t || 0));
+      if (sorted[i]) openDrill(sorted[i].truck_code);
+    }
+  }
+});
+
+// Make the chart's bars and triangles look clickable on hover.
+barChart.getZr().on('mousemove', (ev) => {
+  const target = ev.target;
+  if (target && (target.onclick || (target.parent && target.parent.onclick))) {
+    barChart.getDom().style.cursor = 'pointer';
+  } else {
+    barChart.getDom().style.cursor = 'default';
+  }
+});
+barChart.getZr().on('mouseout', () => { barChart.getDom().style.cursor = 'default'; });
+
 // ============================================================
 // Drill-down modal chart (ECharts with native dataZoom)
 // ============================================================
-let modalChart = null;
-let currentSamples = [];
 
 function fmtTs(ms) {
   return new Date(ms).toISOString().replace('T', ' ').slice(0, 19);
