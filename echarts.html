@@ -521,6 +521,24 @@ function buildBarChart() {
 const barChart = buildBarChart();
 if (barChart) {
   window.addEventListener('resize', () => barChart.resize());
+  // Bar-chart click drill-in. Use chart-level click handler (more reliable
+  // than per-element onclick on custom-series children). Deferred to next
+  // tick so any setup errors don't break the rest of the script.
+  setTimeout(() => {
+    try {
+      barChart.on('click', (params) => {
+        if (params && params.componentType === 'series' && params.seriesName === 'baseline → avg loaded (t)') {
+          const i = params.dataIndex;
+          if (typeof i === 'number') {
+            const sorted = [...TRUCKS].sort((a, b) => (b.avg_peak_t || 0) - (a.avg_peak_t || 0));
+            if (sorted[i]) openDrill(sorted[i].truck_code);
+          }
+        }
+      });
+    } catch (e) {
+      // Bar-click drill-in not available — per-truck cards still work.
+    }
+  }, 0);
 }
 
 // ============================================================
