@@ -395,37 +395,40 @@ function buildBarChart() {
   // Sort trucks by avg descending — heaviest average first
   const sorted = [...TRUCKS].sort((a, b) => (b.avg_peak_t || 0) - (a.avg_peak_t || 0));
   const labels = sorted.map(t => t.truck_code);
-  // Bar series: [baseline, avg_peak_t] floating bar (ECharts renders as stack-style)
-  const barData = sorted.map(t => {
-    const baseline = (t.baseline_t !== undefined && t.baseline_t !== null) ? +t.baseline_t : 0;
-    const avg = +t.avg_peak_t || 0;
-    return [Math.min(baseline, avg), Math.max(baseline, avg) - Math.min(baseline, avg)];
-  });
   const maxData = sorted.map(t => +t.max_peak_t || 0);
   const colors = sorted.map(t => colorMap[t.verdict[0]] || '#6b7280');
+  // Build per-truck data: each entry has baseline + avg + max so the
+  // custom renderItem can draw a true floating bar from baseline to avg
+  // and a triangle marker for the max peak.
+  const truckData = sorted.map(t => ({
+    name: t.truck_code,
+    baseline: (t.baseline_t !== undefined && t.baseline_t !== null) ? +t.baseline_t : 0,
+    avg: +t.avg_peak_t || 0,
+    max: +t.max_peak_t || 0,
+    serial: t.device_serial,
+    verdict: t.verdict[1],
+    zeroQuality: t.zero_quality_pct,
+  }));
 
   chart.setOption({
-    grid: { left: 60, right: 30, top: 50, bottom: 40 },
+    grid: { left: 60, right: 60, top: 50, bottom: 60 },
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'shadow' },
       formatter: (params) => {
         const i = params[0].dataIndex;
-        const t = sorted[i];
-        const r = barData[i];
-        const base = r[0];
-        const top = r[0] + r[1];
-        return '<strong>' + t.truck_code + '</strong> (' + t.device_serial + ')<br/>' +
-               'baseline: ' + base.toFixed(1) + 't → avg: ' + top.toFixed(1) + 't<br/>' +
-               'max peak: ' + maxData[i].toFixed(1) + 't<br/>' +
-               'verdict: ' + t.verdict[1];
+        const t = truckData[i];
+        return '<strong>' + t.name + '</strong> (' + t.serial + ')<br/>' +
+               'baseline: ' + t.baseline.toFixed(1) + 't → avg: ' + t.avg.toFixed(1) + 't<br/>' +
+               'max peak: ' + t.max.toFixed(1) + 't<br/>' +
+               'verdict: ' + t.verdict;
       }
     },
-    legend: { data: ['baseline → avg loaded', 'max peak'], textStyle: { color: '#e2e8f0' }, top: 10 },
+    legend: { data: ['baseline → avg loaded (t)', 'max peak (t)'], textStyle: { color: '#e2e8f0' }, top: 10 },
     xAxis: {
       type: 'category',
       data: labels,
-      axisLabel: { color: '#94a3b8' },
+      axisLabel: { color: '#94a3b8', rotate: 30 },
       axisLine: { lineStyle: { color: '#1e293b' } },
     },
     yAxis: {
@@ -434,68 +437,88 @@ function buildBarChart() {
       nameTextStyle: { color: '#94a3b8' },
       axisLabel: { color: '#94a3b8', formatter: v => v + 't' },
       splitLine: { lineStyle: { color: '#1e293b' } },
-      // Highlight the zero line
       axisLine: { lineStyle: { color: '#1e293b' } },
     },
     series: [
+      // True floating bar via custom series + renderItem.
+      // This guarantees each datum renders as a rectangle from
+      // baseline to avg, regardless of ECharts version quirks with
+      // stacked bar layouts.
       {
-        name: 'baseline → avg loaded',
-        type: 'bar',
-        stack: 'load',
-        data: barData,
-        itemStyle: {
-          color: (params) => colors[params.dataIndex] + '99',
-          borderColor: (params) => colors[params.dataIndex],
-          borderWidth: 1.5,
-          borderRadius: 2,
+        name: 'baseline → avg loaded (t)',
+        type: 'custom',
+        renderItem: (params, api) => {
+          const i = params.dataIndex;
+          const t = truckData[i];
+          const cat = api.coord([i, t.avg]);
+          const base = api.coord([i, t.baseline]);
+          // Ensure the rectangle has a minimum visible height (1px) so
+          // very small avg values are still rendered.
+          const yTop = Math.min(cat[1], base[1]);
+          const yBot = Math.max(cat[1], base[1]);
+          const height = Math.max(2, yBot - yTop);
+          const rect = {
+            type: 'rect',
+            shape: {
+              x: cat[0] - 18,
+              y: yTop,
+              width: 36,
+              height: height,
+              r: 2,
+            },
+            style: {
+              fill: colors[i] + '99',
+              stroke: colors[i],
+              lineWidth: 1.5,
+            },
+          };
+          // Triangle marker for max peak, above the bar
+          const maxP = api.coord([i, t.max]);
+          const tri = {
+            type: 'polygon',
+            shape: {
+              points: [
+                [maxP[0], maxP[1] - 10],
+                [maxP[0] - 6, maxP[1] - 1],
+                [maxP[0] + 6, maxP[1] - 1],
+              ],
+            },
+            style: {
+              fill: '#fbbf24',
+              stroke: '#000',
+              lineWidth: 1.5,
+            },
+          };
+          return { type: 'group', children: [rect, tri] };
         },
-        barWidth: '50%',
+        encode: { x: 0, y: 1 },
+        data: truckData.map((t, i) => [i, t.avg]),
       },
+      // Mark the zero reference line on the y-axis
       {
-        name: 'max peak',
-        type: 'scatter',
-        symbol: 'triangle',
-        symbolSize: 14,
-        symbolOffset: [0, -10],
-        data: maxData.map((m, i) => ({ value: m, itemStyle: { color: '#fbbf24', borderColor: '#000', borderWidth: 1.5 } })),
-      }
-    ],
-    // Use ECharts' built-in markLine for the zero reference
-    series: undefined, // reset above
-  });
-  // Re-set with markLine on the y-axis (ECharts oddity: markLine on yAxis needs series)
-  chart.setOption({
-    series: [
-      {
-        name: 'baseline → avg loaded',
-        type: 'bar',
-        stack: 'load',
-        data: barData,
-        itemStyle: {
-          color: (params) => colors[params.dataIndex] + '99',
-          borderColor: (params) => colors[params.dataIndex],
-          borderWidth: 1.5,
-          borderRadius: 2,
+        name: '_zero_line',
+        type: 'custom',
+        renderItem: (params, api) => {
+          const y = api.coord([0, 0])[1];
+          if (y < api.getHeight() * 0.1 || y > api.getHeight() * 0.9) return null;
+          const grid = api.getWidth();
+          return {
+            type: 'group',
+            children: [{
+              type: 'line',
+              shape: { x1: 60, y1: y, x2: grid - 30, y2: y },
+              style: { stroke: '#fafafa', lineWidth: 1.5, lineDash: [6, 4] },
+            }],
+          };
         },
-        barWidth: '50%',
-        markLine: {
-          symbol: 'none',
-          lineStyle: { color: '#fafafa', type: 'dashed', width: 1.5 },
-          label: { show: true, formatter: '0 t (zero reference)', position: 'insideEndTop', color: '#fafafa' },
-          data: [{ yAxis: 0 }],
-        },
+        data: [0],
+        tooltip: { show: false },
+        silent: true,
+        legendHoverLink: false,
+        z: 1,
       },
-      {
-        name: 'max peak',
-        type: 'scatter',
-        symbol: 'triangle',
-        symbolSize: 14,
-        symbolOffset: [0, -10],
-        data: maxData.map((m, i) => ({ value: m, itemStyle: { color: '#fbbf24', borderColor: '#000', borderWidth: 1.5 } })),
-      }
     ],
   });
-  return chart;
 }
 
 const barChart = buildBarChart();
