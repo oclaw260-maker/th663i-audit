@@ -480,7 +480,7 @@ function buildBarChart() {
               lineWidth: 1.5,
             },
             // Click anywhere within the bar to drill in.
-            onclick: () => openDrill(t.name),
+            // onclick: () => openDrill(t.name),  // disabled: causes setOption crash; using chart-level click instead
           };
           // Triangle marker for max peak, above the bar
           const maxP = api.coord([i, t.max]);
@@ -498,75 +498,34 @@ function buildBarChart() {
               stroke: '#000',
               lineWidth: 1.5,
             },
-            // Click the triangle to drill in too.
-            onclick: () => openDrill(t.name),
+            // onclick: () => openDrill(t.name),  // disabled: causes setOption crash
           };
           return { type: 'group', children: [rect, tri] };
         },
         encode: { x: 0, y: 1 },
         data: truckData.map((t, i) => [i, t.avg]),
-      },
-      // Mark the zero reference line on the y-axis
-      {
-        name: '_zero_line',
-        type: 'custom',
-        renderItem: (params, api) => {
-          const y = api.coord([0, 0])[1];
-          if (y < api.getHeight() * 0.1 || y > api.getHeight() * 0.9) return null;
-          const grid = api.getWidth();
-          return {
-            type: 'group',
-            children: [{
-              type: 'line',
-              shape: { x1: 60, y1: y, x2: grid - 30, y2: y },
-              style: { stroke: '#fafafa', lineWidth: 1.5, lineDash: [6, 4] },
-            }],
-          };
+        // Zero reference line (horizontal dashed line at y=0)
+        markLine: {
+          symbol: 'none',
+          silent: true,
+          lineStyle: { color: '#fafafa', type: 'dashed', width: 1.5 },
+          label: { show: true, formatter: '0 t (zero reference)', position: 'insideEndTop', color: '#fafafa' },
+          data: [{ yAxis: 0 }],
         },
-        data: [0],
-        tooltip: { show: false },
-        silent: true,
-        legendHoverLink: false,
-        z: 1,
       },
     ],
   });
+  return chart;
 }
 
 const barChart = buildBarChart();
-window.addEventListener('resize', () => barChart.resize());
-
-// Click handler for the bar chart. This is a fallback for cases
-// where ECharts' custom-element onclick handler doesn't fire (e.g.
-// when a click is detected at a slightly offset position, or when
-// the underlying ZRender element isn't hit). The bar's dataIndex
-// maps to truckData[i].name, so we can route to the same drill-in.
-barChart.on('click', (params) => {
-  if (params.componentType === 'series' && params.seriesName === 'baseline → avg loaded (t)') {
-    const i = params.dataIndex;
-    if (typeof i === 'number') {
-      // Re-derive the truck code in the same order as buildBarChart.
-      const sorted = [...TRUCKS].sort((a, b) => (b.avg_peak_t || 0) - (a.avg_peak_t || 0));
-      if (sorted[i]) openDrill(sorted[i].truck_code);
-    }
-  }
-});
-
-// Make the chart's bars and triangles look clickable on hover.
-barChart.getZr().on('mousemove', (ev) => {
-  const target = ev.target;
-  if (target && (target.onclick || (target.parent && target.parent.onclick))) {
-    barChart.getDom().style.cursor = 'pointer';
-  } else {
-    barChart.getDom().style.cursor = 'default';
-  }
-});
-barChart.getZr().on('mouseout', () => { barChart.getDom().style.cursor = 'default'; });
+if (barChart) {
+  window.addEventListener('resize', () => barChart.resize());
+}
 
 // ============================================================
 // Drill-down modal chart (ECharts with native dataZoom)
 // ============================================================
-
 function fmtTs(ms) {
   return new Date(ms).toISOString().replace('T', ' ').slice(0, 19);
 }
@@ -728,8 +687,8 @@ function closeDrill() {
 }
 
 document.addEventListener('click', e => {
-  if (e.target.classList.contains('drill-btn')) openDrill(e.target.dataset.truck);
-  if (e.target.classList.contains('close-btn')) closeDrill();
+  if (e.target.classList && e.target.classList.contains('drill-btn')) openDrill(e.target.dataset.truck);
+  if (e.target.classList && e.target.classList.contains('close-btn')) closeDrill();
   if (e.target.id === 'modal-bg') closeDrill();
 });
 </script>
