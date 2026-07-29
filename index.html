@@ -601,6 +601,7 @@ let currentChart = null;
 let currentTruck = null;
 let currentSamples = [];   // array of {ts, v} objects, sorted ascending by ts
 let pendingRangeDraw = false;
+let chartRedrawTimer = null;
 
 function fmtTs(ms) {
   const d = new Date(ms);
@@ -652,6 +653,7 @@ function closeDrill() {
   document.getElementById('modal-bg').classList.remove('open');
   if (currentChart) { currentChart.destroy(); currentChart = null; }
   pendingRangeDraw = false;
+  if (chartRedrawTimer) { clearTimeout(chartRedrawTimer); chartRedrawTimer = null; }
 }
 
 // Compute sample index range from slider %
@@ -711,7 +713,20 @@ function drawChartFromSlider() {
   if (!currentSamples.length) return;
   const { i0, i1, count } = indexRangeFromSlider();
   const slice = currentSamples.slice(i0, i1 + 1);
-  drawChart(slice, currentSamples[i0]?.ts, currentSamples[i1]?.ts);
+  const t0 = currentSamples[i0]?.ts;
+  const t1 = currentSamples[i1]?.ts;
+  if (t0 == null || t1 == null) return;
+  // Empty slice (slider window has no samples): don't draw — avoid the
+  // Chart.js "red circle" error that appears when a dataset has zero points
+  // but the time-scale still expects valid bounds.
+  if (slice.length === 0) {
+    if (currentChart) {
+      currentChart.data.datasets[0].data = [];
+      currentChart.update('none');
+    }
+    return;
+  }
+  drawChart(slice, t0, t1);
 }
 
 // Downsample for chart perf only — preserve peaks
@@ -745,7 +760,18 @@ function downsamplePeaks(samples, maxPoints = 1500) {
 
 function drawChart(samples, t0, t1) {
   if (!samples.length) return;
-  if (currentChart) currentChart.destroy();
+  // Guard against Chart.js tooltip callbacks blowing up on empty datasets.
+  // (Empty datasets render a "red circle" error in the canvas — we prevent that
+  // by short-circuiting before the dataset is assigned.)
+  const stats = computeStats(samples);
+  const statsLine = document.getElementById('range-stats');
+  statsLine.innerHTML =
+    '<span>min ' + (isFinite(stats.min) ? stats.min.toFixed(1) : '—') + 't</span>  ' +
+    '<span>max ' + (isFinite(stats.max) ? stats.max.toFixed(1) : '—') + 't</span>  ' +
+    '<span>mean ' + (isFinite(stats.mean) ? stats.mean.toFixed(1) : '—') + 't</span>  ' +
+    '<span>σ ' + (isFinite(stats.std) ? stats.std.toFixed(1) : '—') + 't</span>  ' +
+    '<span>peaks&gt;30t ' + stats.cycles + '</span>  ' +
+    '<span>spans ' + ((t1 - t0) / 60000).toFixed(0) + 'min</span>';
 
   // Cap plot points so the browser stays responsive (~3000 max).
   // Use peak-preserving downsampling when we have > 3000 samples.
@@ -754,17 +780,21 @@ function drawChart(samples, t0, t1) {
   // Build data as {x, y} for time scale
   const points = plotData.map(s => ({ x: s.ts, y: s.v }));
 
-  const stats = computeStats(samples);
-  const statsLine = document.getElementById('range-stats');
-  statsLine.innerHTML =
-    '<span>min ' + stats.min.toFixed(1) + 't</span>  ' +
-    '<span>max ' + stats.max.toFixed(1) + 't</span>  ' +
-    '<span>mean ' + stats.mean.toFixed(1) + 't</span>  ' +
-    '<span>σ ' + stats.std.toFixed(1) + 't</span>  ' +
-    '<span>peaks&gt;30t ' + stats.cycles + '</span>  ' +
-    '<span>spans ' + ((t1 - t0) / 60000).toFixed(0) + 'min</span>';
-
   const canvas = document.getElementById('m-chart');
+
+  // Incremental update path — if the chart already exists and is the same
+  // type, just swap the data and call chart.update('none') (no animation).
+  // This avoids the destroy-and-rebuild path which is the source of the
+  // visible "jerky" redraws on every slider tick.
+  if (currentChart && currentChart.canvas === canvas && currentChart.config.type === 'line') {
+    currentChart.data.datasets[0].data = points;
+    currentChart.options.scales.x.min = t0;
+    currentChart.options.scales.x.max = t1;
+    currentChart.update('none');
+    return;
+  }
+
+  // Initial-build path — only runs once per modal open.
   currentChart = new Chart(canvas, {
     type: 'line',
     data: { datasets: [{
@@ -790,14 +820,22 @@ function drawChart(samples, t0, t1) {
         legend: { labels: { color: '#e2e8f0' } },
         tooltip: {
           callbacks: {
-            title: items => new Date(items[0].parsed.x).toISOString().replace('T', ' ').slice(0, 19),
-            label: item => item.parsed.y.toFixed(1) + ' t',
+            title: items => {
+              if (!items || !items[0] || items[0].parsed == null) return '';
+              return new Date(items[0].parsed.x).toISOString().replace('T', ' ').slice(0, 19);
+            },
+            label: item => {
+              if (!item || item.parsed == null) return '';
+              return item.parsed.y.toFixed(1) + ' t';
+            },
           },
         },
       },
       scales: {
         x: {
           type: 'time',
+          min: t0,
+          max: t1,
           time: {
             unit: getAdaptiveTimeUnit(samples),
             displayFormats: {
@@ -818,7 +856,7 @@ function drawChart(samples, t0, t1) {
             color: (ctx) => ctx.tick.value === 0 ? '#475569' : '#1e293b',
             lineWidth: (ctx) => ctx.tick.value === 0 ? 1.5 : 1,
           },
-          // Pad 10% on each side so points don't hug the axes.
+          // Pad 5%/10% on each side so points don't hug the axes.
           afterDataLimits: (scale) => {
             const range = scale.max - scale.min;
             scale.min -= range * 0.05;
@@ -921,11 +959,16 @@ document.addEventListener('input', e => {
     let s = parseFloat(rs.value), ed = parseFloat(re.value);
     if (e.target.id === 'r-start' && s > ed - 0.5) { rs.value = ed - 0.5; s = ed - 0.5; }
     if (e.target.id === 'r-end' && ed < s + 0.5) { re.value = s + 0.5; ed = s + 0.5; }
+    // Update labels and timestamp text on EVERY frame — cheap.
     updateSliderUI();
-    if (!pendingRangeDraw) {
-      pendingRangeDraw = true;
-      requestAnimationFrame(() => { drawChartFromSlider(); pendingRangeDraw = false; });
-    }
+    // Throttle chart redraws to once every ~50ms. The incremental update
+    // path in drawChart() reuses the same Chart instance instead of
+    // destroying + rebuilding, which is what made dragging look jerky.
+    if (chartRedrawTimer) clearTimeout(chartRedrawTimer);
+    chartRedrawTimer = setTimeout(() => {
+      drawChartFromSlider();
+      chartRedrawTimer = null;
+    }, 50);
   }
 });
 
