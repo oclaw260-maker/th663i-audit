@@ -67,7 +67,7 @@ done
 
 # Confirm key marker from THIS run on index.html
 PAGE=$(curl -s --max-time 6 "$URL")
-if echo "$PAGE" | grep -q 'unloaded → loaded range'; then
+if echo "$PAGE" | grep -q 'baseline (empty):'; then
   log "Verified: new bar-chart marker present on index.html"
 else
   log "WARN: new bar-chart marker not visible yet on index.html — Pages may still be propagating"
